@@ -1,0 +1,438 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="46">
+  <meta name="description" content="画像とタグからXへの投稿を作成">
+  <title>46 - X投稿</title>
+
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+    }
+
+    body {
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: max(16px, env(safe-area-inset-top)) 20px 16px;
+      font-size: 20px;
+      font-weight: 800;
+      border-bottom: 1px solid #222;
+    }
+
+    main {
+      width: 100%;
+      max-width: 650px;
+      margin: 0 auto;
+      flex: 1;
+      padding: 20px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      border: none;
+      border-radius: 14px;
+      padding: 14px 18px;
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    button:active {
+      transform: scale(.97);
+    }
+
+    #loadButton {
+      flex: 1;
+      background: #fff;
+      color: #000;
+    }
+
+    #status {
+      color: #aaa;
+      font-size: 13px;
+      line-height: 1.7;
+      margin: 12px 0 20px;
+      overflow-wrap: anywhere;
+    }
+
+    #results {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .item {
+      padding: 16px;
+      border: 1px solid #292929;
+      border-radius: 18px;
+      background: #101010;
+    }
+
+    .tags {
+      margin: 0 0 14px;
+      font-size: 16px;
+      font-weight: 750;
+      line-height: 1.8;
+      overflow-wrap: anywhere;
+    }
+
+    .preview {
+      display: block;
+      width: 100%;
+      max-height: 420px;
+      object-fit: contain;
+      background: #080808;
+      border-radius: 12px;
+      margin-bottom: 14px;
+    }
+
+    .generated-url {
+      display: block;
+      margin-bottom: 14px;
+      color: #aaa;
+      font-size: 12px;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+      text-decoration: none;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .x-button {
+      flex: 1;
+      min-width: 150px;
+      background: #fff;
+      color: #000;
+    }
+
+    .open-button {
+      flex: 1;
+      min-width: 120px;
+      background: #292929;
+      color: #fff;
+    }
+
+    .copy-button {
+      background: #292929;
+      color: #fff;
+    }
+
+    footer {
+      padding: 16px 12px max(16px, env(safe-area-inset-bottom));
+      color: #666;
+      text-align: center;
+      font-size: 12px;
+    }
+
+    @media (min-width: 600px) {
+      main {
+        padding-top: 28px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>𝕏 46 - X投稿</header>
+
+  <main>
+    <div class="toolbar">
+      <button id="loadButton" type="button">データを取得</button>
+    </div>
+
+    <p id="status" role="status" aria-live="polite">
+      データを取得しています...
+    </p>
+
+    <section id="results" aria-label="画像一覧"></section>
+  </main>
+
+  <footer>46 PWA</footer>
+
+  <script>
+    const API_URL =
+      "https://script.google.com/macros/s/AKfycbw05HQKu3inuJOMqx0k12aKGxE16joj7htstZ55nD2YkZ2dGB75LQnX650X50R-DE47/exec";
+
+    const IMAGE_PREFIX = "https://idoljp.com/files/src/";
+
+    const SHARE_PREFIX = "https://46.idoljp.workers.dev/?img=";
+
+    const statusElement = document.getElementById("status");
+    const resultsElement = document.getElementById("results");
+    const loadButton = document.getElementById("loadButton");
+
+    // srcから共有用URLを生成する
+    function createShareUrl(src) {
+      if (typeof src !== "string" || !src.startsWith(IMAGE_PREFIX)) {
+        return null;
+      }
+
+      let imageUrl;
+
+      try {
+        imageUrl = new URL(src);
+      } catch {
+        return null;
+      }
+
+      // 指定したホスト・パス以外は受け付けない
+      if (
+        imageUrl.origin !== "https://idoljp.com" ||
+        !imageUrl.pathname.startsWith("/files/src/") ||
+        imageUrl.search ||
+        imageUrl.hash
+      ) {
+        return null;
+      }
+
+      // 画像ファイル名を取得し、拡張子を削除
+      const filename = imageUrl.pathname.split("/").pop();
+
+      if (!filename || !/^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/.test(filename)) {
+        return null;
+      }
+
+      const imageId = filename.replace(/\.[^.]+$/, "");
+
+      return SHARE_PREFIX + encodeURIComponent(imageId);
+    }
+
+    // Xの投稿作成画面を開く
+    function openXIntent(text) {
+      const intentUrl =
+        "https://twitter.com/intent/tweet?text=" +
+        encodeURIComponent(text);
+
+      window.open(intentUrl, "_blank", "noopener,noreferrer");
+    }
+
+    // テキストをクリップボードにコピー
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        statusElement.textContent = "コピーしました。";
+      } catch {
+        // Clipboard APIが利用できない環境向け
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+
+        document.body.appendChild(textarea);
+        textarea.select();
+
+        const success = document.execCommand("copy");
+        textarea.remove();
+
+        statusElement.textContent = success
+          ? "コピーしました。"
+          : "コピーできませんでした。";
+      }
+    }
+
+    // HTMLとして解釈させずにテキストを表示
+    function createTextElement(tagName, className, text) {
+      const element = document.createElement(tagName);
+      element.className = className;
+      element.textContent = text;
+      return element;
+    }
+
+    // 1件の結果を画面に追加
+    function renderItem(item) {
+      if (!item || typeof item !== "object") {
+        return;
+      }
+
+      const shareUrl = createShareUrl(item.src);
+
+      if (!shareUrl || !Array.isArray(item.tags)) {
+        return;
+      }
+
+      const tags = item.tags
+        .filter(tag => typeof tag === "string")
+        .map(tag => tag.trim())
+        .filter(Boolean);
+
+      const tagText = tags.join(" ");
+      const postText = [tagText, shareUrl]
+        .filter(Boolean)
+        .join("\n");
+
+      const card = document.createElement("article");
+      card.className = "item";
+
+      card.appendChild(
+        createTextElement("p", "tags", tagText || "タグなし")
+      );
+
+      const image = document.createElement("img");
+      image.className = "preview";
+      image.src = item.src;
+      image.alt = tagText || "画像";
+      image.loading = "lazy";
+      image.referrerPolicy = "no-referrer";
+
+      image.addEventListener("error", () => {
+        image.style.display = "none";
+      });
+
+      card.appendChild(image);
+
+      const link = document.createElement("a");
+      link.className = "generated-url";
+      link.href = shareUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = shareUrl;
+
+      card.appendChild(link);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      const xButton = createTextElement(
+        "button",
+        "x-button",
+        "𝕏 に投稿"
+      );
+      xButton.type = "button";
+      xButton.addEventListener("click", () => {
+        openXIntent(postText);
+      });
+
+      const openButton = createTextElement(
+        "button",
+        "open-button",
+        "URLを開く"
+      );
+      openButton.type = "button";
+      openButton.addEventListener("click", () => {
+        window.open(shareUrl, "_blank", "noopener,noreferrer");
+      });
+
+      const copyButton = createTextElement(
+        "button",
+        "copy-button",
+        "コピー"
+      );
+      copyButton.type = "button";
+      copyButton.addEventListener("click", () => {
+        copyText(postText);
+      });
+
+      actions.append(xButton, openButton, copyButton);
+      card.appendChild(actions);
+
+      resultsElement.appendChild(card);
+    }
+
+    // GAS APIからJSONを取得
+    async function loadData() {
+      loadButton.disabled = true;
+      resultsElement.replaceChildren();
+      statusElement.textContent = "データを取得しています...";
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "GET",
+          cache: "no-store",
+          redirect: "follow"
+        });
+
+        if (!response.ok) {
+          throw new Error("HTTPエラー: " + response.status);
+        }
+
+        const data = await response.json();
+
+        if (!data || !Array.isArray(data.results)) {
+          throw new Error("APIのJSON形式が想定と異なります。");
+        }
+
+        data.results.forEach(renderItem);
+
+        const count = resultsElement.children.length;
+
+        statusElement.textContent =
+          "ページ: " + (data.page ?? "-") +
+          " / 取得件数: " + data.results.length +
+          " / 表示件数: " + count;
+
+        if (count === 0) {
+          statusElement.textContent +=
+            "。表示できる画像がありません。";
+        }
+      } catch (error) {
+        console.error(error);
+
+        statusElement.textContent =
+          "取得に失敗しました。通信状況とAPIのCORS設定を確認してください。";
+
+        const retryButton = createTextElement(
+          "button",
+          "open-button",
+          "再試行"
+        );
+
+        retryButton.type = "button";
+        retryButton.addEventListener("click", loadData);
+        resultsElement.appendChild(retryButton);
+      } finally {
+        loadButton.disabled = false;
+      }
+    }
+
+    loadButton.addEventListener("click", loadData);
+
+    // PWAのService Workerを登録
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("./sw.js")
+          .catch(error => console.error(
+            "Service Workerの登録に失敗しました:",
+            error
+          ));
+      });
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
