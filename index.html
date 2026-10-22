@@ -27,8 +27,21 @@
   </style>
 </head>
 <body>
-  <img src="https://pbs.twimg.com/media/HVJB9-ha4AAE8TU?format=jpg&name=large" alt="">
+  <img id="main-image" src="" alt="">
 
-  <script async src="https://adm.shinobi.jp/st/auto.js" data-admax-id="c1c803c7ccf6204879512da3acb766d6"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const img = params.get("img");
+
+    if (img && /^[a-zA-Z0-9_-]+$/.test(img)) {
+      document.getElementById("main-image").src =
+        `https://idoljp.com/files/src/${img}.jpg`;
+    }
+  </script>
+
+  <script async
+    src="https://adm.shinobi.jp/st/auto.js"
+    data-admax-id="c1c803c7ccf6204879512da3acb766d6">
+  </script>
 </body>
 </html>
