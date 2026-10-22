@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>画像中央部分をコピー</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #copyButton {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: none;
+      background: #000;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    #preview {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    #message {
+      position: fixed;
+      left: 50%;
+      bottom: max(24px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      padding: 12px 22px;
+      border-radius: 24px;
+      background: rgba(30, 30, 30, 0.85);
+      color: white;
+      font-size: 15px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    #message.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <button id="copyButton" type="button"
+          aria-label="画像の中央正方形部分をコピー">
+    <img id="preview" alt="タップして中央部分をコピー">
+  </button>
+
+  <div id="message" role="status" aria-live="polite">
+    コピーしました
+  </div>
+
+  <script>
+    // URL例:
+    // https://username.github.io/?img=28522-dfd7c6707476e6ae55b6bfbea0e8a21f
+
+    const params = new URLSearchParams(location.search);
+
+    const imgId = params.get("img") ||
+      "28522-dfd7c6707476e6ae55b6bfbea0e8a21f";
+
+    // ファイル名に使用可能な文字だけを許可
+    if (!/^[a-zA-Z0-9_-]+$/.test(imgId)) {
+      document.body.innerHTML =
+        '<p style="color:white;padding:20px">画像IDが不正です。</p>';
+      throw new Error("Invalid image ID");
+    }
+
+    const imageUrl =
+      `https://idoljp.com/files/src/${imgId}.jpg`;
+
+    const preview = document.getElementById("preview");
+    const copyButton = document.getElementById("copyButton");
+    const message = document.getElementById("message");
+
+    preview.src = imageUrl;
+
+    let messageTimer;
+
+    function showMessage(text) {
+      message.textContent = text;
+      message.classList.add("show");
+
+      clearTimeout(messageTimer);
+      messageTimer = setTimeout(() => {
+        message.classList.remove("show");
+      }, 1800);
+    }
+
+    async function copyCenterSquare() {
+      if (!preview.complete || !preview.naturalWidth) {
+        showMessage("画像を読み込んでいます");
+        return;
+      }
+
+      const width = preview.naturalWidth;
+      const height = preview.naturalHeight;
+
+      // 短辺に合わせた最大面積の正方形
+      const side = Math.min(width, height);
+
+      // 中央位置を計算
+      const sx = (width - side) / 2;
+      const sy = (height - side) / 2;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = side;
+      canvas.height = side;
+
+      const ctx = canvas.getContext("2d");
+
+      // 中央の正方形だけを切り抜く
+      ctx.drawImage(
+        preview,
+        sx, sy, side, side,
+        0, 0, side, side
+      );
+
+      try {
+        // PNG画像としてクリップボードへコピー
+        const blob = await new Promise((resolve, reject) => {
+          canvas.toBlob(result => {
+            if (result) resolve(result);
+            else reject(new Error("画像変換に失敗"));
+          }, "image/png");
+        });
+
+        if (!navigator.clipboard ||
+            typeof ClipboardItem === "undefined") {
+          throw new Error("Clipboard API unavailable");
+        }
+
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "image/png": blob
+          })
+        ]);
+
+        showMessage("中央の正方形画像をコピーしました");
+      } catch (error) {
+        console.error(error);
+        showMessage(
+          "コピーできません。HTTPS接続と画像の共有設定を確認してください"
+        );
+      }
+    }
+
+    copyButton.addEventListener("click", copyCenterSquare);
+
+    preview.addEventListener("error", () => {
+      showMessage("画像を読み込めませんでした");
+    });
+  </script>
+</body>
+</html>
