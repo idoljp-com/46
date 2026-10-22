@@ -133,6 +133,7 @@
       const imageUrl =
         `${WORKER_URL}?img=${encodeURIComponent(imgId)}`;
 
+      preview.crossOrigin = "anonymous";
       preview.src = imageUrl;
     }
 
