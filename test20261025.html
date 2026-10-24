@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -14,41 +15,39 @@
 
     html,
     body {
+      margin: 0;
       width: 100%;
       height: 100%;
-      margin: 0;
-      padding: 0;
       overflow: hidden;
       background: #000;
       color: #fff;
       font-family: Arial, sans-serif;
-      overscroll-behavior: none;
+    }
+
+    body {
+      position: fixed;
+      inset: 0;
     }
 
     #app {
       position: fixed;
       inset: 0;
-      width: 100%;
-      height: 100%;
-      height: 100dvh;
-      display: flex;
-      flex-direction: column;
       overflow: hidden;
+      background: #000;
     }
 
     #image-area {
-      flex: 1;
-      min-height: 0;
-      width: 100%;
+      position: absolute;
+      inset: 0 0 calc(74px + env(safe-area-inset-bottom)) 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 12px;
       overflow: hidden;
+      padding: 8px;
     }
 
-    #photo {
-      display: block;
+    #main-image {
+      display: none;
       max-width: 100%;
       max-height: 100%;
       width: auto;
@@ -59,381 +58,393 @@
     }
 
     #message {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 90%;
+      max-width: 90%;
       text-align: center;
-      white-space: pre-line;
-      overflow-wrap: anywhere;
       color: #aaa;
-      font-size: 14px;
-      line-height: 1.7;
+      font-size: 15px;
+      line-height: 1.8;
+      overflow-wrap: anywhere;
+      white-space: pre-line;
+    }
+
+    #counter {
+      position: absolute;
+      top: max(8px, env(safe-area-inset-top));
+      left: 0;
+      right: 0;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 12px;
       pointer-events: none;
     }
 
-    #rating-bar {
-      flex-shrink: 0;
-      display: flex;
-      width: 100%;
-      gap: 1px;
+    #buttons {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: calc(74px + env(safe-area-inset-bottom));
       padding-bottom: env(safe-area-inset-bottom);
-      background: #222;
+      display: flex;
+      gap: 1px;
+      background: #000;
     }
 
-    .rating {
+    .rate-button {
       flex: 1;
       min-width: 0;
-      height: 64px;
+      height: 74px;
       border: 0;
-      border-radius: 0;
+      margin: 0;
       color: #fff;
-      font-size: 17px;
-      font-weight: bold;
+      font-size: 20px;
+      font-weight: 700;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;
     }
 
-    .rating:active {
-      filter: brightness(.8);
+    .rate-button:active {
+      filter: brightness(1.2);
     }
 
-    .rating:disabled {
-      opacity: .5;
-      cursor: wait;
+    .rate-button:disabled {
+      opacity: 0.5;
+      cursor: default;
     }
 
     #good {
-      background: #168447;
+      background: #17603b;
     }
 
     #soso {
-      background: #777;
+      background: #484848;
     }
 
     #bad {
-      background: #c63838;
+      background: #842d2d;
+    }
+
+    @media (max-height: 420px) {
+      #buttons {
+        height: calc(54px + env(safe-area-inset-bottom));
+      }
+
+      .rate-button {
+        height: 54px;
+        font-size: 16px;
+      }
+
+      #image-area {
+        bottom: calc(54px + env(safe-area-inset-bottom));
+      }
     }
   </style>
 </head>
 
 <body>
   <main id="app">
+    <div id="counter"></div>
 
     <div id="image-area">
-      <img id="photo" alt="" hidden>
+      <img id="main-image" alt="評価する画像" draggable="false">
+      <div id="message">データを取得しています...</div>
     </div>
 
-    <div id="message">データを読み込み中...</div>
-
-    <div id="rating-bar">
-      <button class="rating" id="good" data-rating="GOOD">
-        GOOD
-      </button>
-
-      <button class="rating" id="soso" data-rating="SOSO">
-        SOSO
-      </button>
-
-      <button class="rating" id="bad" data-rating="BAD">
-        BAD
-      </button>
+    <div id="buttons">
+      <button class="rate-button" id="good" disabled>GOOD</button>
+      <button class="rate-button" id="soso" disabled>SOSO</button>
+      <button class="rate-button" id="bad" disabled>BAD</button>
     </div>
-
   </main>
 
   <script>
     'use strict';
 
-    // ========================================
-    // スプレッドシート設定
-    // ========================================
+    // 対象のスプレッドシート
+    const SPREADSHEET_ID =
+      '1yrelfrbpahuv-Dg1rUsYMlavnOk8siwTAh3Sp8CKW8U';
 
-    const SPREADSHEET_URL =
-      'https://docs.google.com/spreadsheets/d/e/' +
-      '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-';
+    // 「取得結果」シートのgid
+    const SHEET_GID = '1405762441';
 
-    // 使用するシート名
-    const SHEET_NAME = '取得結果';
-
-    // シート名を指定してデータを取得
+    // Google Sheets Visualization API
     const DATA_URL =
-      SPREADSHEET_URL +
-      '/gviz/tq?tqx=out:json&sheet=' +
-      encodeURIComponent(SHEET_NAME);
+      `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}` +
+      `/gviz/tq?tqx=out:json&gid=${SHEET_GID}&headers=1`;
 
-    // ========================================
-    // 要素・状態
-    // ========================================
-
-    const photo = document.getElementById('photo');
-    const message = document.getElementById('message');
+    const imageElement = document.getElementById('main-image');
+    const messageElement = document.getElementById('message');
+    const counterElement = document.getElementById('counter');
 
     const buttons = [
-      ...document.querySelectorAll('.rating')
+      document.getElementById('good'),
+      document.getElementById('soso'),
+      document.getElementById('bad')
     ];
 
-    let candidates = [];
-    let remaining = [];
-    let currentItem = null;
-    let loadingNext = false;
+    let imageList = [];
+    let remainingImages = [];
+    let currentImage = null;
+    let loadingImage = false;
 
-    // 読み込みに失敗した画像のURL
-    const failedImages = new Set();
+    // 評価結果は現在のページ内で記録するだけで、
+    // スプレッドシートへの書き込みは行わない。
+    const evaluations = {
+      GOOD: 0,
+      SOSO: 0,
+      BAD: 0
+    };
 
-    // ========================================
-    // 共通処理
-    // ========================================
+    function setMessage(text) {
+      messageElement.textContent = text;
+      messageElement.style.display = 'block';
+      imageElement.style.display = 'none';
+    }
+
+    function setButtonsEnabled(enabled) {
+      buttons.forEach(button => {
+        button.disabled = !enabled;
+      });
+    }
 
     function normalize(value) {
       return String(value ?? '').trim();
     }
 
-    function cellValue(cell) {
-      if (!cell || cell.v == null) {
-        return '';
+    // Visualization APIの応答をJSONとして解析する
+    function parseGoogleResponse(responseText) {
+      const match = responseText.match(
+        /google\.visualization\.Query\.setResponse\(([\s\S]*?)\);?\s*$/
+      );
+
+      if (!match) {
+        throw new Error(
+          'Google Sheetsの応答を解析できません。\n' +
+          '公開設定またはアクセス権限を確認してください。'
+        );
       }
 
-      return String(cell.v);
+      return JSON.parse(match[1]);
     }
 
-    function getColumnIndex(columns, name) {
-      return columns.findIndex(column =>
-        normalize(column.label) === name ||
-        normalize(column.id) === name
-      );
+    // セルの値を取得する
+    function getCellValue(cell) {
+      if (!cell) return '';
+
+      if (cell.v !== null && cell.v !== undefined) {
+        return cell.v;
+      }
+
+      return cell.f ?? '';
     }
 
-    function setButtonsDisabled(disabled) {
-      buttons.forEach(button => {
-        button.disabled = disabled;
-      });
-    }
-
-    function showMessage(text) {
-      photo.hidden = true;
-      photo.removeAttribute('src');
-      message.textContent = text;
-    }
-
-    // ========================================
-    // スプレッドシート読み込み
-    // ========================================
-
-    async function loadData() {
-      setButtonsDisabled(true);
+    async function loadSpreadsheet() {
+      setMessage('データを取得しています...');
+      setButtonsEnabled(false);
 
       try {
         const response = await fetch(DATA_URL, {
+          method: 'GET',
           cache: 'no-store'
         });
 
         if (!response.ok) {
           throw new Error(
-            'HTTPエラー: ' + response.status
+            `スプレッドシート取得失敗: HTTP ${response.status}`
           );
         }
 
-        const text = await response.text();
-
-        // Google Visualization APIの応答を解析
-        const match = text.match(
-          /google\.visualization\.Query\.setResponse\(([\s\S]*?)\);?\s*$/
-        );
-
-        if (!match) {
-          throw new Error(
-            'データ形式を解析できません。公開設定を確認してください。'
-          );
-        }
-
-        const result = JSON.parse(match[1]);
+        const responseText = await response.text();
+        const result = parseGoogleResponse(responseText);
 
         if (result.status !== 'ok') {
+          const detail = result.errors
+            ?.map(error => error.detailed_message || error.message)
+            .filter(Boolean)
+            .join('\n');
+
           throw new Error(
-            '「取得結果」シートの取得に失敗しました'
+            detail || 'Google Sheetsから正常な応答がありません。'
           );
         }
 
         const table = result.table;
-        const columns = table.cols;
 
-        // 必要な列
-        const srcIndex = getColumnIndex(
-          columns,
-          'src'
+        if (!table || !Array.isArray(table.cols)) {
+          throw new Error('シートのデータ形式が正しくありません。');
+        }
+
+        // 列名を特定する
+        const headers = table.cols.map(column =>
+          normalize(column.label || column.id)
         );
 
-        const newtagIndex = getColumnIndex(
-          columns,
-          'Newtag'
+        const srcIndex = headers.findIndex(
+          header => header.toLowerCase() === 'src'
         );
 
-        if (srcIndex < 0 || newtagIndex < 0) {
+        const newtagIndex = headers.findIndex(
+          header => header.toLowerCase() === 'newtag'
+        );
+
+        if (srcIndex === -1 || newtagIndex === -1) {
           throw new Error(
-            '「取得結果」シートにsrc列またはNewtag列がありません'
+            '必要な列が見つかりません。\n' +
+            '1行目の列名が「src」と「Newtag」になっているか確認してください。'
           );
         }
 
-        // ========================================
-        // 抽出条件
-        //
-        // srcが空欄ではない
-        // Newtagが空欄
-        // tags列は使用しない
-        // ========================================
-
-        candidates = table.rows
+        // srcが存在し、Newtagが空欄の行だけを抽出する
+        const candidates = (table.rows || [])
           .map(row => {
             const cells = row.c || [];
 
             return {
-              src: normalize(
-                cellValue(cells[srcIndex])
-              ),
-              newtag: normalize(
-                cellValue(cells[newtagIndex])
-              )
+              src: normalize(getCellValue(cells[srcIndex])),
+              newtag: normalize(getCellValue(cells[newtagIndex]))
             };
           })
-          .filter(item => {
-            return item.src !== '' &&
-                   item.newtag === '';
-          });
-
-        if (candidates.length === 0) {
-          showMessage(
-            '「取得結果」シートに条件に合う画像がありません'
+          .filter(item =>
+            item.src !== '' &&
+            item.newtag === ''
           );
-          return;
+
+        // URLの重複を除去する
+        imageList = [
+          ...new Map(
+            candidates.map(item => [item.src, item.src])
+          ).values()
+        ];
+
+        if (imageList.length === 0) {
+          throw new Error(
+            '表示できる画像がありません。\n' +
+            'src列のURLと、Newtag列が空欄の行を確認してください。'
+          );
         }
 
-        remaining = [...candidates];
+        // ランダム順に並べ替え、一巡するまで重複を防ぐ
+        remainingImages = shuffle([...imageList]);
 
         showNextImage();
 
       } catch (error) {
-        console.error(error);
+        console.error('データ取得エラー:', error);
 
-        showMessage(
-          'データを取得できませんでした。\n' +
-          '「取得結果」シートの公開設定、シート名、列名を確認してください。'
+        setMessage(
+          'データを取得できませんでした。\n\n' +
+          (error.message || '不明なエラー') +
+          '\n\n' +
+          'スプレッドシートの共有設定を確認してください。'
         );
+
+        counterElement.textContent = '';
+        setButtonsEnabled(false);
       }
     }
 
-    // ========================================
-    // ランダム選択
-    // ========================================
-
-    function pickRandom() {
-      // 全候補を表示したら再び一巡
-      if (remaining.length === 0) {
-        remaining = candidates.filter(
-          item => !failedImages.has(item.src)
-        );
+    // Fisher-Yatesシャッフル
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
       }
 
-      if (remaining.length === 0) {
-        return null;
-      }
-
-      const index = Math.floor(
-        Math.random() * remaining.length
-      );
-
-      return remaining.splice(index, 1)[0];
+      return array;
     }
-
-    // ========================================
-    // 次の画像を表示
-    // ========================================
 
     function showNextImage() {
-      const nextItem = pickRandom();
+      if (loadingImage) return;
 
-      if (!nextItem) {
-        currentItem = null;
-        loadingNext = false;
-        setButtonsDisabled(true);
-
-        showMessage(
-          '表示できる画像がありません'
-        );
-
-        return;
-      }
-
-      currentItem = nextItem;
-      loadingNext = true;
-
-      setButtonsDisabled(true);
-
-      message.textContent = '画像を読み込み中...';
-      photo.hidden = true;
-
-      photo.onload = () => {
-        message.textContent = '';
-        photo.hidden = false;
-
-        loadingNext = false;
-        setButtonsDisabled(false);
-      };
-
-      photo.onerror = () => {
-        console.error(
-          '画像の読み込みに失敗:',
-          nextItem.src
-        );
-
-        failedImages.add(nextItem.src);
-
-        candidates = candidates.filter(
-          item => item.src !== nextItem.src
-        );
-
-        remaining = remaining.filter(
-          item => item.src !== nextItem.src
-        );
-
-        loadingNext = false;
-        showNextImage();
-      };
-
-      photo.src = nextItem.src;
-    }
-
-    // ========================================
-    // 評価ボタン
-    // ========================================
-
-    buttons.forEach(button => {
-      button.addEventListener('click', () => {
-        if (loadingNext || !currentItem) {
+      if (remainingImages.length === 0) {
+        if (imageList.length === 0) {
+          setMessage('表示できる画像がありません。');
+          setButtonsEnabled(false);
           return;
         }
 
-        const rating = button.dataset.rating;
+        // 全画像を一巡したら再びランダム順にする
+        remainingImages = shuffle([...imageList]);
 
-        // 現時点では評価を保存しない
-        console.log(
-          '評価:',
-          rating,
-          '画像:',
-          currentItem.src
-        );
+        // 一巡の境界で直前の画像が連続しないようにする
+        if (
+          remainingImages.length > 1 &&
+          remainingImages[0] === currentImage
+        ) {
+          [remainingImages[0], remainingImages[1]] =
+            [remainingImages[1], remainingImages[0]];
+        }
+      }
+
+      const nextSrc = remainingImages.shift();
+
+      currentImage = nextSrc;
+      loadingImage = true;
+      setButtonsEnabled(false);
+      setMessage('画像を読み込んでいます...');
+
+      const preload = new Image();
+
+      preload.onload = () => {
+        imageElement.src = nextSrc;
+        imageElement.style.display = 'block';
+        messageElement.style.display = 'none';
+
+        counterElement.textContent =
+          `${imageList.length - remainingImages.length} / ${imageList.length}`;
+
+        loadingImage = false;
+        setButtonsEnabled(true);
+      };
+
+      preload.onerror = () => {
+        console.warn('画像読み込み失敗:', nextSrc);
+        loadingImage = false;
+
+        // 読み込みに失敗した画像は除外して次へ進む
+        imageList = imageList.filter(src => src !== nextSrc);
+        remainingImages = remainingImages.filter(src => src !== nextSrc);
+
+        if (imageList.length === 0) {
+          setMessage('表示できる画像がありません。');
+          counterElement.textContent = '';
+          setButtonsEnabled(false);
+          return;
+        }
 
         showNextImage();
+      };
+
+      preload.src = nextSrc;
+    }
+
+    function evaluate(type) {
+      if (!currentImage || loadingImage) return;
+
+      evaluations[type]++;
+
+      console.log('評価:', {
+        type,
+        src: currentImage,
+        counts: { ...evaluations }
       });
+
+      showNextImage();
+    }
+
+    document.getElementById('good').addEventListener('click', () => {
+      evaluate('GOOD');
     });
 
-    // ========================================
-    // 開始
-    // ========================================
+    document.getElementById('soso').addEventListener('click', () => {
+      evaluate('SOSO');
+    });
 
-    loadData();
+    document.getElementById('bad').addEventListener('click', () => {
+      evaluate('BAD');
+    });
+
+    loadSpreadsheet();
   </script>
 </body>
 </html>
