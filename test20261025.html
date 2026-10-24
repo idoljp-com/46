@@ -44,7 +44,7 @@
       align-items: center;
       justify-content: center;
       overflow: hidden;
-      padding: 0;
+      background: #000;
     }
 
     #main-image {
@@ -65,10 +65,15 @@
       padding: 24px;
       text-align: center;
       white-space: pre-line;
+      overflow-wrap: anywhere;
       color: #aaa;
       font-size: 15px;
       line-height: 1.8;
-      overflow-wrap: anywhere;
+    }
+
+    #message[hidden],
+    #main-image[hidden] {
+      display: none;
     }
 
     #buttons {
@@ -86,6 +91,7 @@
       flex: 1;
       min-width: 0;
       height: 74px;
+      padding: 0;
       border: 0;
       border-radius: 0;
       color: #fff;
@@ -117,6 +123,10 @@
     }
 
     @media (max-height: 400px) {
+      #image-area {
+        bottom: calc(58px + env(safe-area-inset-bottom));
+      }
+
       #buttons {
         height: calc(58px + env(safe-area-inset-bottom));
       }
@@ -124,10 +134,6 @@
       .rating-button {
         height: 58px;
         font-size: 17px;
-      }
-
-      #image-area {
-        bottom: calc(58px + env(safe-area-inset-bottom));
       }
     }
   </style>
@@ -150,18 +156,18 @@
   <script>
     'use strict';
 
-    // 公開スプレッドシートの設定
-    const SPREADSHEET_ID =
-      '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-';
+    // ========================================
+    // スプレッドシート設定
+    // ========================================
 
-    const SHEET_GID = '1405762441';
-
-    // gidを指定してデータを取得
     const DATA_URL =
       'https://docs.google.com/spreadsheets/d/e/' +
-      SPREADSHEET_ID +
-      '/gviz/tq?tqx=out:json&gid=' +
-      SHEET_GID;
+      '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-' +
+      '/pub?gid=1405762441&single=true&output=csv';
+
+    // ========================================
+    // DOM
+    // ========================================
 
     const imageElement = document.getElementById('main-image');
     const messageElement = document.getElementById('message');
@@ -172,6 +178,10 @@
       document.getElementById('bad')
     ];
 
+    // ========================================
+    // 状態
+    // ========================================
+
     let images = [];
     let remainingImages = [];
     let currentImage = null;
@@ -179,6 +189,10 @@
     let requestToken = 0;
 
     const failedImages = new Set();
+
+    // ========================================
+    // 表示制御
+    // ========================================
 
     function setMessage(text) {
       messageElement.textContent = text;
@@ -195,139 +209,142 @@
       });
     }
 
-    function normalize(value) {
-      if (value === null || value === undefined) {
-        return '';
+    // ========================================
+    // CSV解析
+    // カンマ、改行、ダブルクォートに対応
+    // ========================================
+
+    function parseCSV(text) {
+      const rows = [];
+
+      let row = [];
+      let value = '';
+      let quoted = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+
+        if (char === '"') {
+          if (quoted && text[i + 1] === '"') {
+            value += '"';
+            i++;
+          } else {
+            quoted = !quoted;
+          }
+        } else if (char === ',' && !quoted) {
+          row.push(value);
+          value = '';
+        } else if (
+          (char === '\n' || char === '\r') &&
+          !quoted
+        ) {
+          if (char === '\r' && text[i + 1] === '\n') {
+            i++;
+          }
+
+          row.push(value);
+
+          if (row.some(cell => cell.trim() !== '')) {
+            rows.push(row);
+          }
+
+          row = [];
+          value = '';
+        } else {
+          value += char;
+        }
       }
 
-      return String(value).trim();
+      if (value !== '' || row.length > 0) {
+        row.push(value);
+
+        if (row.some(cell => cell.trim() !== '')) {
+          rows.push(row);
+        }
+      }
+
+      return rows;
     }
 
-    // Google Visualization APIの値を取得
-    function getCellValue(cell) {
-      if (!cell) {
-        return '';
-      }
+    // ========================================
+    // CSVから画像URLを抽出
+    // srcが空でなく、Newtagが空欄の行のみ対象
+    // ========================================
 
-      if (cell.v !== null && cell.v !== undefined) {
-        return cell.v;
-      }
+    function extractImagesFromCSV(csvText) {
+      const rows = parseCSV(csvText.replace(/^\uFEFF/, ''));
 
-      return cell.f ?? '';
-    }
-
-    // 公開シートのレスポンスからテーブルを抽出
-    function parseGoogleResponse(text) {
-      const start = text.indexOf('{');
-      const end = text.lastIndexOf('}');
-
-      if (start === -1 || end === -1 || end < start) {
+      if (rows.length < 2) {
         throw new Error(
-          'Google Sheetsから有効なデータが返されませんでした。'
+          'CSVにデータ行がありません。'
         );
       }
 
-      const jsonText = text.slice(start, end + 1);
-      const response = JSON.parse(jsonText);
+      const headers = rows[0].map(value =>
+        value.trim().toLowerCase()
+      );
 
-      if (response.status === 'error') {
-        const details = (response.errors || [])
-          .map(error => error.detailed_message || error.message)
-          .filter(Boolean)
-          .join('\n');
+      const srcIndex = headers.indexOf('src');
+      const newtagIndex = headers.indexOf('newtag');
 
-        throw new Error(
-          details || 'Google Sheets APIでエラーが発生しました。'
-        );
-      }
-
-      if (!response.table || !Array.isArray(response.table.cols)) {
-        throw new Error(
-          'シートのデータを確認できません。公開設定を確認してください。'
-        );
-      }
-
-      return response.table;
-    }
-
-    function findColumnIndex(columns, name) {
-      const target = name.toLowerCase();
-
-      return columns.findIndex(column => {
-        const label = normalize(column.label).toLowerCase();
-        const id = normalize(column.id).toLowerCase();
-
-        return label === target || id === target;
-      });
-    }
-
-    // src列とNewtag列をヘッダー名で特定
-    function extractImages(table) {
-      const columns = table.cols || [];
-      const rows = table.rows || [];
-
-      let srcIndex = findColumnIndex(columns, 'src');
-      let newtagIndex = findColumnIndex(columns, 'Newtag');
-
-      // ヘッダーが認識できない場合は先頭行から確認
       if (srcIndex === -1 || newtagIndex === -1) {
-        if (!rows.length) {
-          throw new Error('シートにデータ行がありません。');
-        }
-
-        const firstRow = (rows[0].c || []).map(cell =>
-          normalize(getCellValue(cell)).toLowerCase()
+        throw new Error(
+          'src列またはNewtag列が見つかりません。\n' +
+          'CSVの1行目の列名を確認してください。'
         );
-
-        if (srcIndex === -1) {
-          srcIndex = firstRow.indexOf('src');
-        }
-
-        if (newtagIndex === -1) {
-          newtagIndex = firstRow.indexOf('newtag');
-        }
-
-        if (srcIndex === -1 || newtagIndex === -1) {
-          throw new Error(
-            'src列またはNewtag列が見つかりません。\n' +
-            '1行目の列名と公開シートを確認してください。'
-          );
-        }
-
-        rows.shift();
       }
 
-      return rows
-        .map(row => {
-          const cells = row.c || [];
+      const result = [];
 
-          return {
-            src: normalize(getCellValue(cells[srcIndex])),
-            newtag: normalize(getCellValue(cells[newtagIndex]))
-          };
-        })
-        .filter(item => {
-          return item.src !== '' && item.newtag === '';
-        })
-        .map(item => item.src)
-        .filter((src, index, array) => {
-          return array.indexOf(src) === index;
-        });
+      for (const row of rows.slice(1)) {
+        const src = (row[srcIndex] || '').trim();
+        const newtag = (row[newtagIndex] || '').trim();
+
+        if (!src || newtag !== '') {
+          continue;
+        }
+
+        // URLとして有効なhttp/httpsのみ採用
+        try {
+          const url = new URL(src);
+
+          if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+
+        result.push(src);
+      }
+
+      // 同じ画像URLの重複を除去
+      return [...new Set(result)];
     }
 
-    // 一巡するまで重複しないようにシャッフル
+    // ========================================
+    // 配列をランダムにシャッフル
+    // ========================================
+
     function shuffle(array) {
       const result = array.slice();
 
       for (let i = result.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [result[i], result[j]] = [result[j], result[i]];
+
+        [result[i], result[j]] = [
+          result[j],
+          result[i]
+        ];
       }
 
       return result;
     }
 
-    // 画像を実際に読み込めるか確認
+    // ========================================
+    // 画像の読み込み確認
+    // ========================================
+
     function preloadImage(src) {
       return new Promise(resolve => {
         const image = new Image();
@@ -339,18 +356,20 @@
       });
     }
 
-    // 読み込み可能な画像だけを残す
+    // ========================================
+    // 表示可能な画像を検査
+    // ========================================
+
     async function validateImages(list) {
       const valid = [];
 
       for (let i = 0; i < list.length; i++) {
-        const src = list[i];
-
         setMessage(
           '画像を確認しています...\n' +
           (i + 1) + ' / ' + list.length
         );
 
+        const src = list[i];
         const loaded = await preloadImage(src);
 
         if (loaded) {
@@ -363,8 +382,14 @@
       return valid;
     }
 
+    // ========================================
+    // CSVデータ取得
+    // ========================================
+
     async function loadData() {
       setButtonsEnabled(false);
+      imageElement.hidden = true;
+
       setMessage('データを読み込んでいます...');
 
       try {
@@ -375,31 +400,47 @@
 
         if (!response.ok) {
           throw new Error(
-            'データ取得に失敗しました。HTTP ' + response.status
+            'CSV取得失敗: HTTP ' + response.status
           );
         }
 
-        const text = await response.text();
-        const table = parseGoogleResponse(text);
-        const candidates = extractImages(table);
+        const csvText = await response.text();
+
+        if (
+          csvText.trimStart().startsWith('<!DOCTYPE html') ||
+          csvText.trimStart().startsWith('<html')
+        ) {
+          throw new Error(
+            'CSVではなくHTMLが返されました。\n' +
+            '公開URLを確認してください。'
+          );
+        }
+
+        const candidates = extractImagesFromCSV(csvText);
 
         if (candidates.length === 0) {
           throw new Error(
-            '表示できる画像がありません。\n' +
-            'src列にURLがあり、Newtag列が空欄の行を確認してください。'
+            '表示対象の画像がありません。\n' +
+            'srcが入力され、Newtagが空欄の行を確認してください。'
           );
         }
+
+        setMessage(
+          '画像を確認しています...\n' +
+          '対象画像：' + candidates.length + ' 枚'
+        );
 
         images = await validateImages(candidates);
 
         if (images.length === 0) {
           throw new Error(
-            '表示できる画像を読み込めませんでした。\n' +
-            'src列の画像URLやアクセス制限を確認してください。'
+            '表示可能な画像がありません。\n' +
+            'src列のURLや画像へのアクセス制限を確認してください。'
           );
         }
 
         remainingImages = shuffle(images);
+
         showNextImage();
 
       } catch (error) {
@@ -410,12 +451,16 @@
         setMessage(
           'データを取得できませんでした。\n\n' +
           (error.message || '不明なエラーが発生しました。') +
-          '\n\n「取得結果」シートの公開設定、gid、列名を確認してください。'
+          '\n\n公開CSVのURLやアクセス制限を確認してください。'
         );
 
         setButtonsEnabled(false);
       }
     }
+
+    // ========================================
+    // 次の画像を表示
+    // ========================================
 
     async function showNextImage() {
       if (isLoadingImage) {
@@ -449,6 +494,7 @@
           }
 
           currentImage = src;
+
           imageElement.src = src;
           imageElement.hidden = false;
 
@@ -471,30 +517,46 @@
       }
     }
 
-    // 評価ボタンを押すと次の画像へ
+    // ========================================
+    // 評価ボタン
+    // 現時点では評価を保存せず次の画像へ進む
+    // ========================================
+
     function rateImage(rating) {
       if (!currentImage || isLoadingImage) {
         return;
       }
 
-      // 現時点では評価を保存せず、次の画像へ進む
-      console.log('評価:', rating, '画像URL:', currentImage);
+      console.log(
+        '評価:',
+        rating,
+        '画像URL:',
+        currentImage
+      );
 
       currentImage = null;
+
       showNextImage();
     }
 
-    document.getElementById('good').addEventListener('click', () => {
-      rateImage('GOOD');
-    });
+    document.getElementById('good').addEventListener(
+      'click',
+      () => rateImage('GOOD')
+    );
 
-    document.getElementById('soso').addEventListener('click', () => {
-      rateImage('SOSO');
-    });
+    document.getElementById('soso').addEventListener(
+      'click',
+      () => rateImage('SOSO')
+    );
 
-    document.getElementById('bad').addEventListener('click', () => {
-      rateImage('BAD');
-    });
+    document.getElementById('bad').addEventListener(
+      'click',
+      () => rateImage('BAD')
+    );
+
+    // ========================================
+    // 起動
+    // ========================================
 
     loadData();
   </script>
