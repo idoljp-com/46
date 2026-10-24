@@ -211,7 +211,6 @@
 
     // ========================================
     // CSV解析
-    // カンマ、改行、ダブルクォートに対応
     // ========================================
 
     function parseCSV(text) {
@@ -267,17 +266,43 @@
     }
 
     // ========================================
+    // Newtagの除外条件
+    //
+    // 除外：
+    // ・Newtagが空欄
+    // ・Newtagに「その他」を含む
+    // ・Newtagに「エラー」を含む
+    //
+    // 上記以外を対象にする
+    // ========================================
+
+    function isExcludedNewtag(value) {
+      const newtag = String(value ?? '').trim();
+
+      if (newtag === '') {
+        return true;
+      }
+
+      if (newtag.includes('その他')) {
+        return true;
+      }
+
+      if (newtag.includes('エラー')) {
+        return true;
+      }
+
+      return false;
+    }
+
+    // ========================================
     // CSVから画像URLを抽出
-    // srcが空でなく、Newtagが空欄の行のみ対象
     // ========================================
 
     function extractImagesFromCSV(csvText) {
       const rows = parseCSV(csvText.replace(/^\uFEFF/, ''));
 
       if (rows.length < 2) {
-        throw new Error(
-          'CSVにデータ行がありません。'
-        );
+        throw new Error('CSVにデータ行がありません。');
       }
 
       const headers = rows[0].map(value =>
@@ -297,18 +322,27 @@
       const result = [];
 
       for (const row of rows.slice(1)) {
-        const src = (row[srcIndex] || '').trim();
-        const newtag = (row[newtagIndex] || '').trim();
+        const src = String(row[srcIndex] ?? '').trim();
+        const newtag = String(row[newtagIndex] ?? '').trim();
 
-        if (!src || newtag !== '') {
+        // srcが空欄の行を除外
+        if (src === '') {
           continue;
         }
 
-        // URLとして有効なhttp/httpsのみ採用
+        // Newtagが空欄、その他、エラーを含む行を除外
+        if (isExcludedNewtag(newtag)) {
+          continue;
+        }
+
+        // HTTP / HTTPSのURLのみ対象
         try {
           const url = new URL(src);
 
-          if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+          if (
+            url.protocol !== 'http:' &&
+            url.protocol !== 'https:'
+          ) {
             continue;
           }
         } catch {
@@ -318,12 +352,12 @@
         result.push(src);
       }
 
-      // 同じ画像URLの重複を除去
+      // URLの重複を除去
       return [...new Set(result)];
     }
 
     // ========================================
-    // 配列をランダムにシャッフル
+    // ランダムシャッフル
     // ========================================
 
     function shuffle(array) {
@@ -342,7 +376,7 @@
     }
 
     // ========================================
-    // 画像の読み込み確認
+    // 画像読み込み確認
     // ========================================
 
     function preloadImage(src) {
@@ -355,10 +389,6 @@
         image.src = src;
       });
     }
-
-    // ========================================
-    // 表示可能な画像を検査
-    // ========================================
 
     async function validateImages(list) {
       const valid = [];
@@ -383,7 +413,7 @@
     }
 
     // ========================================
-    // CSVデータ取得
+    // データ取得
     // ========================================
 
     async function loadData() {
@@ -421,21 +451,16 @@
         if (candidates.length === 0) {
           throw new Error(
             '表示対象の画像がありません。\n' +
-            'srcが入力され、Newtagが空欄の行を確認してください。'
+            'srcが入力され、Newtagが空欄・その他・エラー以外の行を確認してください。'
           );
         }
-
-        setMessage(
-          '画像を確認しています...\n' +
-          '対象画像：' + candidates.length + ' 枚'
-        );
 
         images = await validateImages(candidates);
 
         if (images.length === 0) {
           throw new Error(
             '表示可能な画像がありません。\n' +
-            'src列のURLや画像へのアクセス制限を確認してください。'
+            'src列のURLやアクセス制限を確認してください。'
           );
         }
 
@@ -519,7 +544,6 @@
 
     // ========================================
     // 評価ボタン
-    // 現時点では評価を保存せず次の画像へ進む
     // ========================================
 
     function rateImage(rating) {
