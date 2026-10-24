@@ -168,7 +168,6 @@
 
     const MAX_AGE = 22;
 
-    // Wikipediaページと取得対象テーブル
     const WIKIPEDIA_GROUPS = [
       {
         name: '乃木坂46',
@@ -191,8 +190,11 @@
     // DOM
     // ========================================
 
-    const imageElement = document.getElementById('main-image');
-    const messageElement = document.getElementById('message');
+    const imageElement =
+      document.getElementById('main-image');
+
+    const messageElement =
+      document.getElementById('message');
 
     const buttons = [
       document.getElementById('good'),
@@ -213,7 +215,7 @@
 
     const failedImages = new Set();
 
-    // 名前から年齢への対応表
+    // メンバー名 -> 年齢情報
     const eligibleMembers = new Map();
 
     // ========================================
@@ -236,11 +238,30 @@
     }
 
     // ========================================
+    // 文字列正規化
+    // ========================================
+
+    function normalizeName(value) {
+      return String(value ?? '')
+        .normalize('NFKC')
+        .replace(/[\s\u3000]+/g, '')
+        .trim();
+    }
+
+    function normalizeHeader(value) {
+      return String(value ?? '')
+        .replace(/[\s\u3000]+/g, '')
+        .replace(/[［\[][^］\]]*[］\]]/g, '')
+        .trim();
+    }
+
+    // ========================================
     // CSV解析
     // ========================================
 
     function parseCSV(text) {
       const rows = [];
+
       let row = [];
       let value = '';
       let quoted = false;
@@ -262,7 +283,10 @@
           (char === '\n' || char === '\r') &&
           !quoted
         ) {
-          if (char === '\r' && text[i + 1] === '\n') {
+          if (
+            char === '\r' &&
+            text[i + 1] === '\n'
+          ) {
             i++;
           }
 
@@ -291,18 +315,7 @@
     }
 
     // ========================================
-    // 文字列正規化
-    // ========================================
-
-    function normalizeName(value) {
-      return String(value ?? '')
-        .normalize('NFKC')
-        .replace(/[\s\u3000]+/g, '')
-        .trim();
-    }
-
-    // ========================================
-    // Wikipedia API
+    // Wikipedia APIでページ取得
     // ========================================
 
     async function fetchWikipediaTable(group) {
@@ -325,152 +338,294 @@
 
       if (!response.ok) {
         throw new Error(
-          group.name + 'のWikipedia取得失敗: HTTP ' +
+          group.name +
+          'のWikipedia取得失敗: HTTP ' +
           response.status
         );
       }
 
       const data = await response.json();
 
-      if (!data.parse || !data.parse.text) {
+      if (data.error) {
+        throw new Error(
+          data.error.info || 'Wikipedia APIエラー'
+        );
+      }
+
+      if (!data.parse?.text?.['*']) {
         throw new Error(
           group.name + 'のWikipedia本文を取得できません。'
         );
       }
 
       const parser = new DOMParser();
-      const doc = parser.parseFromString(
+
+      // APIが返したHTML全体をDOM化する
+      // 特定のIDや階層を前提としない
+      return parser.parseFromString(
         data.parse.text['*'],
         'text/html'
       );
-
-      const table = doc.getElementById(group.tableId);
-
-      if (!table || table.tagName !== 'TABLE') {
-        throw new Error(
-          group.name + 'のテーブルID「' +
-          group.tableId + '」が見つかりません。'
-        );
-      }
-
-      return table;
     }
 
     // ========================================
-    // 生年月日列から年齢を取得
+    // テーブルの行・セルを取得
+    // 入れ子のテーブルの行は混ぜない
     // ========================================
 
-    function extractMembersFromTable(table, groupName) {
-      const result = new Map();
+    function getOwnRows(table) {
+      return Array.from(
+        table.querySelectorAll('tr')
+      ).filter(row => row.closest('table') === table);
+    }
 
-      const rows = Array.from(table.querySelectorAll('tr'));
+    function getOwnCells(row) {
+      return Array.from(row.children).filter(cell =>
+        cell.matches('th, td')
+      );
+    }
 
-      if (rows.length === 0) {
-        throw new Error(
-          groupName + 'のテーブルに行がありません。'
-        );
-      }
+    // ========================================
+    // 見出しから列を判定
+    // ========================================
 
-      // 見出し行から名前列・生年月日列を特定
-      let nameIndex = -1;
-      let birthdayIndex = -1;
+    function findColumnIndexes(rows) {
+      for (let r = 0; r < rows.length; r++) {
+        const cells = getOwnCells(rows[r]);
 
-      for (const row of rows) {
-        const cells = Array.from(
-          row.querySelectorAll('th, td')
-        );
+        if (cells.length < 2) {
+          continue;
+        }
 
         const headers = cells.map(cell =>
-          cell.textContent.replace(/\s+/g, '').trim()
+          normalizeHeader(cell.textContent)
         );
 
-        const foundBirthday = headers.findIndex(text =>
+        const birthdayIndex = headers.findIndex(text =>
           text.includes('生年月日')
         );
 
-        const foundName = headers.findIndex(text =>
-          text === '名前' || text === '氏名' ||
-          text === 'メンバー名'
+        if (birthdayIndex === -1) {
+          continue;
+        }
+
+        // 名前列を探す
+        let nameIndex = headers.findIndex(text =>
+          /^(名前|氏名|メンバー名|メンバー)$/.test(text)
         );
 
-        if (foundBirthday !== -1) {
-          birthdayIndex = foundBirthday;
+        // 名前列の見出しがない場合は、
+        // 生年月日列の左側にある列を優先
+        if (nameIndex === -1) {
+          const possibleIndexes = [
+            birthdayIndex - 1,
+            0,
+            birthdayIndex + 1
+          ];
 
-          if (foundName !== -1) {
-            nameIndex = foundName;
+          for (const index of possibleIndexes) {
+            if (
+              index >= 0 &&
+              index < cells.length &&
+              index !== birthdayIndex
+            ) {
+              nameIndex = index;
+              break;
+            }
+          }
+        }
+
+        if (
+          nameIndex !== -1 &&
+          nameIndex !== birthdayIndex
+        ) {
+          return {
+            headerRowIndex: r,
+            nameIndex,
+            birthdayIndex
+          };
+        }
+      }
+
+      return null;
+    }
+
+    // ========================================
+    // 年齢表記を抽出
+    // ========================================
+
+    function extractAge(text) {
+      const normalized = String(text ?? '')
+        .normalize('NFKC')
+        .replace(/\s+/g, ' ');
+
+      // 例: (22歳)、（22歳）
+      const match = normalized.match(
+        /[（(]\s*(\d{1,3})\s*歳\s*[）)]/
+      );
+
+      if (!match) {
+        return null;
+      }
+
+      const age = Number(match[1]);
+
+      return Number.isFinite(age) ? age : null;
+    }
+
+    // ========================================
+    // すべての階層からメンバー表を探索
+    // ========================================
+
+    function extractMembersFromTable(doc, groupName) {
+      const result = new Map();
+
+      // IDの有無に関係なく全テーブルを検索
+      const tables = Array.from(
+        doc.querySelectorAll('table')
+      );
+
+      console.log(
+        groupName + '：探索テーブル数',
+        tables.length
+      );
+
+      // 指定IDのテーブルがあれば先に調べるが、
+      // 見つからなくても全テーブルを探索する
+      const group = WIKIPEDIA_GROUPS.find(
+        item => item.name === groupName
+      );
+
+      const orderedTables = group
+        ? tables.slice().sort((a, b) => {
+            if (a.id === group.tableId) return -1;
+            if (b.id === group.tableId) return 1;
+            return 0;
+          })
+        : tables;
+
+      let matchedTableCount = 0;
+
+      for (const table of orderedTables) {
+        const rows = getOwnRows(table);
+
+        if (rows.length === 0) {
+          continue;
+        }
+
+        const indexes = findColumnIndexes(rows);
+
+        if (!indexes) {
+          continue;
+        }
+
+        matchedTableCount++;
+
+        const {
+          headerRowIndex,
+          nameIndex,
+          birthdayIndex
+        } = indexes;
+
+        console.log(
+          groupName + '：候補テーブル',
+          {
+            id: table.id || '(IDなし)',
+            nameIndex,
+            birthdayIndex,
+            rows: rows.length
+          }
+        );
+
+        for (
+          let r = headerRowIndex + 1;
+          r < rows.length;
+          r++
+        ) {
+          const cells = getOwnCells(rows[r]);
+
+          if (
+            cells.length <= nameIndex ||
+            cells.length <= birthdayIndex
+          ) {
+            continue;
           }
 
+          const nameCell = cells[nameIndex];
+          const birthdayCell = cells[birthdayIndex];
+
+          // 見出し行を除外
+          if (
+            nameCell.tagName === 'TH' ||
+            birthdayCell.tagName === 'TH'
+          ) {
+            continue;
+          }
+
+          const name = normalizeName(
+            nameCell.textContent
+          );
+
+          const birthdayText =
+            birthdayCell.textContent.trim();
+
+          if (!name || !birthdayText) {
+            continue;
+          }
+
+          const age = extractAge(birthdayText);
+
+          // 年齢表記がない行は推測しない
+          if (age === null) {
+            continue;
+          }
+
+          result.set(name, {
+            name,
+            age,
+            group: groupName,
+            eligible: age <= MAX_AGE
+          });
+        }
+
+        // メンバーを取得できたテーブルを採用
+        if (result.size > 0) {
           break;
         }
       }
 
-      if (birthdayIndex === -1 || nameIndex === -1) {
+      if (matchedTableCount === 0) {
         throw new Error(
           groupName +
-          'のテーブルで名前列または生年月日列を特定できません。'
+          'のページ内に生年月日列を持つテーブルがありません。'
         );
       }
 
-      for (const row of rows) {
-        const cells = Array.from(
-          row.querySelectorAll('th, td')
+      if (result.size === 0) {
+        throw new Error(
+          groupName +
+          'のメンバー表は見つかりましたが、' +
+          '「（x歳）」形式の年齢を抽出できませんでした。'
         );
-
-        if (
-          cells.length <= nameIndex ||
-          cells.length <= birthdayIndex
-        ) {
-          continue;
-        }
-
-        const nameCell = cells[nameIndex];
-        const birthdayCell = cells[birthdayIndex];
-
-        // 見出し行は除外
-        if (
-          nameCell.tagName === 'TH' ||
-          birthdayCell.tagName === 'TH'
-        ) {
-          continue;
-        }
-
-        const name = normalizeName(nameCell.textContent);
-        const birthdayText = birthdayCell.textContent
-          .replace(/\s+/g, ' ')
-          .trim();
-
-        if (!name || !birthdayText) {
-          continue;
-        }
-
-        // 「（22歳）」「(22歳)」などを抽出
-        const match = birthdayText.match(
-          /[（(]\s*(\d+)\s*歳\s*[）)]/
-        );
-
-        if (!match) {
-          continue;
-        }
-
-        const age = Number(match[1]);
-
-        if (!Number.isFinite(age)) {
-          continue;
-        }
-
-        result.set(name, {
-          name,
-          age,
-          group: groupName,
-          eligible: age <= MAX_AGE
-        });
       }
+
+      console.log(
+        groupName + '：年齢取得人数',
+        result.size
+      );
+
+      console.log(
+        groupName + '：22歳以下',
+        Array.from(result.values()).filter(
+          member => member.eligible
+        ).length
+      );
 
       return result;
     }
 
     // ========================================
-    // 3グループの年齢情報を読み込む
+    // 3グループの年齢情報を取得
     // ========================================
 
     async function loadEligibleMembers() {
@@ -485,28 +640,21 @@
         );
 
         try {
-          const table = await fetchWikipediaTable(group);
+          const doc = await fetchWikipediaTable(group);
 
           const members = extractMembersFromTable(
-            table,
+            doc,
             group.name
           );
 
-          if (members.size === 0) {
-            throw new Error(
-              '年齢を取得できるメンバーがいません。'
+          for (const [name, member] of members) {
+            // 同名メンバーによる誤照合を避けるため、
+            // 名前と所属グループの情報を保持
+            eligibleMembers.set(
+              group.name + '|' + name,
+              member
             );
           }
-
-          for (const [name, member] of members) {
-            // 同名があった場合は対象メンバーとして登録
-            eligibleMembers.set(name, member);
-          }
-
-          console.log(
-            group.name + '：年齢取得件数',
-            members.size
-          );
         } catch (error) {
           console.error(
             group.name + 'の取得エラー:',
@@ -519,8 +667,8 @@
         }
       }
 
-      // 3グループのいずれかが取得できなければ
-      // 不完全な名簿で誤判定しないよう停止
+      // どれかのグループが失敗した場合は
+      // 不完全な名簿で評価を開始しない
       if (errors.length > 0) {
         throw new Error(
           'Wikipediaの年齢情報を完全に取得できませんでした。\n' +
@@ -533,15 +681,24 @@
       ).filter(member => member.eligible).length;
 
       console.log(
-        '年齢取得人数:',
-        eligibleMembers.size,
-        '22歳以下:',
+        '全グループの取得人数:',
+        eligibleMembers.size
+      );
+
+      console.log(
+        '22歳以下の人数:',
         eligibleCount
       );
+
+      if (eligibleCount === 0) {
+        throw new Error(
+          '22歳以下のメンバーを取得できませんでした。'
+        );
+      }
     }
 
     // ========================================
-    // Newtagの対象判定
+    // Newtagの除外条件
     // ========================================
 
     function isExcludedNewtag(value) {
@@ -554,6 +711,10 @@
       );
     }
 
+    // ========================================
+    // Newtagから22歳以下のメンバーを探す
+    // ========================================
+
     function findEligibleMember(newtag) {
       const normalizedTag = normalizeName(newtag);
 
@@ -561,12 +722,16 @@
         return null;
       }
 
-      // Newtagに含まれるメンバー名を検索
-      // 年齢が22歳以下のメンバーのみ返す
-      for (const [name, member] of eligibleMembers) {
+      // メンバー名がNewtagに含まれるか確認
+      for (const member of eligibleMembers.values()) {
+        if (!member.eligible) {
+          continue;
+        }
+
         if (
-          member.eligible &&
-          normalizedTag.includes(name)
+          normalizedTag.includes(
+            normalizeName(member.name)
+          )
         ) {
           return member;
         }
@@ -576,7 +741,7 @@
     }
 
     // ========================================
-    // CSVから画像を抽出
+    // CSVから画像URLを抽出
     // ========================================
 
     function extractImagesFromCSV(csvText) {
@@ -585,7 +750,9 @@
       );
 
       if (rows.length < 2) {
-        throw new Error('CSVにデータ行がありません。');
+        throw new Error(
+          'CSVにデータ行がありません。'
+        );
       }
 
       const headers = rows[0].map(value =>
@@ -595,7 +762,10 @@
       const srcIndex = headers.indexOf('src');
       const newtagIndex = headers.indexOf('newtag');
 
-      if (srcIndex === -1 || newtagIndex === -1) {
+      if (
+        srcIndex === -1 ||
+        newtagIndex === -1
+      ) {
         throw new Error(
           'src列またはNewtag列が見つかりません。'
         );
@@ -604,24 +774,34 @@
       const result = [];
       const seen = new Set();
 
+      let excludedEmpty = 0;
+      let excludedAge = 0;
+      let excludedURL = 0;
+
       for (const row of rows.slice(1)) {
-        const src = String(row[srcIndex] ?? '').trim();
+        const src = String(
+          row[srcIndex] ?? ''
+        ).trim();
+
         const newtag = String(
           row[newtagIndex] ?? ''
         ).trim();
 
+        // srcが空、Newtagが空・その他・エラー
         if (!src || isExcludedNewtag(newtag)) {
+          excludedEmpty++;
           continue;
         }
 
-        // Newtagのメンバー名がWikipediaで22歳以下か確認
+        // Wikipediaの年齢が22歳以下のメンバーか確認
         const member = findEligibleMember(newtag);
 
         if (!member) {
+          excludedAge++;
           continue;
         }
 
-        // HTTP / HTTPSのみ
+        // HTTP / HTTPS以外は除外
         try {
           const url = new URL(src);
 
@@ -629,12 +809,15 @@
             url.protocol !== 'http:' &&
             url.protocol !== 'https:'
           ) {
+            excludedURL++;
             continue;
           }
         } catch {
+          excludedURL++;
           continue;
         }
 
+        // URLの重複を除去
         if (seen.has(src)) {
           continue;
         }
@@ -649,6 +832,13 @@
           group: member.group
         });
       }
+
+      console.log('CSV判定結果:', {
+        対象画像: result.length,
+        除外空欄その他エラー: excludedEmpty,
+        除外年齢条件: excludedAge,
+        除外URL不正: excludedURL
+      });
 
       return result;
     }
@@ -675,7 +865,7 @@
     }
 
     // ========================================
-    // 画像読み込み
+    // 画像読み込み確認
     // ========================================
 
     function preloadImage(src) {
@@ -719,11 +909,15 @@
       setButtonsEnabled(false);
       imageElement.hidden = true;
 
+      setMessage('データを読み込んでいます...');
+
       try {
-        // 最初にWikipediaの年齢情報を取得
+        // 先にWikipediaの年齢情報を取得
         await loadEligibleMembers();
 
-        setMessage('スプレッドシートを読み込んでいます...');
+        setMessage(
+          'スプレッドシートを読み込んでいます...'
+        );
 
         const response = await fetch(DATA_URL, {
           method: 'GET',
@@ -748,17 +942,14 @@
           );
         }
 
-        const candidates = extractImagesFromCSV(csvText);
-
-        console.log(
-          '年齢条件を通過した画像:',
-          candidates.length
+        const candidates = extractImagesFromCSV(
+          csvText
         );
 
         if (candidates.length === 0) {
           throw new Error(
-            '22歳以下のメンバーに該当する画像がありません。\n' +
-            'Newtagにメンバー名が含まれているか確認してください。'
+            '表示対象の画像がありません。\n' +
+            'srcとNewtag、メンバー名、年齢条件を確認してください。'
           );
         }
 
@@ -782,9 +973,10 @@
 
         setMessage(
           'データを取得できませんでした。\n\n' +
-          (error.message || '不明なエラーが発生しました。') +
-          '\n\nWikipediaのテーブルID、公開CSVのURL、' +
-          'ネットワーク接続を確認してください。'
+          (error.message ||
+            '不明なエラーが発生しました。') +
+          '\n\nWikipediaの取得状況、テーブル構造、' +
+          '公開CSVのURL、ネットワーク接続を確認してください。'
         );
 
         setButtonsEnabled(false);
@@ -848,6 +1040,7 @@
 
         currentImage = null;
         currentTag = '';
+
         imageElement.hidden = true;
 
         setMessage(
