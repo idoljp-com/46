@@ -1,0 +1,906 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>画像評価</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #image-area {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: calc(74px + env(safe-area-inset-bottom));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #main-image {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+
+    #message {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+      color: #aaa;
+      font-size: 15px;
+      line-height: 1.8;
+    }
+
+    #message[hidden],
+    #main-image[hidden] {
+      display: none;
+    }
+
+    #buttons {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: calc(74px + env(safe-area-inset-bottom));
+      display: flex;
+      padding-bottom: env(safe-area-inset-bottom);
+      background: #222;
+    }
+
+    .rating-button {
+      flex: 1;
+      min-width: 0;
+      height: 74px;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      color: #fff;
+      font-size: 20px;
+      font-weight: bold;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .rating-button:active {
+      filter: brightness(1.2);
+    }
+
+    .rating-button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    #good {
+      background: #17613d;
+    }
+
+    #soso {
+      background: #505050;
+    }
+
+    #bad {
+      background: #842d2d;
+    }
+
+    @media (max-height: 400px) {
+      #image-area {
+        bottom: calc(58px + env(safe-area-inset-bottom));
+      }
+
+      #buttons {
+        height: calc(58px + env(safe-area-inset-bottom));
+      }
+
+      .rating-button {
+        height: 58px;
+        font-size: 17px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <div id="image-area">
+      <img id="main-image" alt="評価する画像" hidden>
+      <div id="message">データを読み込んでいます...</div>
+    </div>
+
+    <div id="buttons">
+      <button class="rating-button" id="good" disabled>GOOD</button>
+      <button class="rating-button" id="soso" disabled>SOSO</button>
+      <button class="rating-button" id="bad" disabled>BAD</button>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ========================================
+    // 設定
+    // ========================================
+
+    const DATA_URL =
+      'https://docs.google.com/spreadsheets/d/e/' +
+      '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-' +
+      '/pub?gid=1405762441&single=true&output=csv';
+
+    const MAX_AGE = 22;
+
+    // Wikipediaページと取得対象テーブル
+    const WIKIPEDIA_GROUPS = [
+      {
+        name: '乃木坂46',
+        page: '乃木坂46',
+        tableId: 'mwCZE'
+      },
+      {
+        name: '櫻坂46',
+        page: '櫻坂46',
+        tableId: 'mwB0M'
+      },
+      {
+        name: '日向坂46',
+        page: '日向坂46',
+        tableId: 'mwCMM'
+      }
+    ];
+
+    // ========================================
+    // DOM
+    // ========================================
+
+    const imageElement = document.getElementById('main-image');
+    const messageElement = document.getElementById('message');
+
+    const buttons = [
+      document.getElementById('good'),
+      document.getElementById('soso'),
+      document.getElementById('bad')
+    ];
+
+    // ========================================
+    // 状態
+    // ========================================
+
+    let images = [];
+    let remainingImages = [];
+    let currentImage = null;
+    let currentTag = '';
+    let isLoadingImage = false;
+    let requestToken = 0;
+
+    const failedImages = new Set();
+
+    // 名前から年齢への対応表
+    const eligibleMembers = new Map();
+
+    // ========================================
+    // 表示制御
+    // ========================================
+
+    function setMessage(text) {
+      messageElement.textContent = text;
+      messageElement.hidden = false;
+    }
+
+    function hideMessage() {
+      messageElement.hidden = true;
+    }
+
+    function setButtonsEnabled(enabled) {
+      buttons.forEach(button => {
+        button.disabled = !enabled;
+      });
+    }
+
+    // ========================================
+    // CSV解析
+    // ========================================
+
+    function parseCSV(text) {
+      const rows = [];
+      let row = [];
+      let value = '';
+      let quoted = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+
+        if (char === '"') {
+          if (quoted && text[i + 1] === '"') {
+            value += '"';
+            i++;
+          } else {
+            quoted = !quoted;
+          }
+        } else if (char === ',' && !quoted) {
+          row.push(value);
+          value = '';
+        } else if (
+          (char === '\n' || char === '\r') &&
+          !quoted
+        ) {
+          if (char === '\r' && text[i + 1] === '\n') {
+            i++;
+          }
+
+          row.push(value);
+
+          if (row.some(cell => cell.trim() !== '')) {
+            rows.push(row);
+          }
+
+          row = [];
+          value = '';
+        } else {
+          value += char;
+        }
+      }
+
+      if (value !== '' || row.length > 0) {
+        row.push(value);
+
+        if (row.some(cell => cell.trim() !== '')) {
+          rows.push(row);
+        }
+      }
+
+      return rows;
+    }
+
+    // ========================================
+    // 文字列正規化
+    // ========================================
+
+    function normalizeName(value) {
+      return String(value ?? '')
+        .normalize('NFKC')
+        .replace(/[\s\u3000]+/g, '')
+        .trim();
+    }
+
+    // ========================================
+    // Wikipedia API
+    // ========================================
+
+    async function fetchWikipediaTable(group) {
+      const apiURL = new URL(
+        'https://ja.wikipedia.org/w/api.php'
+      );
+
+      apiURL.search = new URLSearchParams({
+        action: 'parse',
+        page: group.page,
+        prop: 'text',
+        format: 'json',
+        origin: '*'
+      }).toString();
+
+      const response = await fetch(apiURL.toString(), {
+        method: 'GET',
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          group.name + 'のWikipedia取得失敗: HTTP ' +
+          response.status
+        );
+      }
+
+      const data = await response.json();
+
+      if (!data.parse || !data.parse.text) {
+        throw new Error(
+          group.name + 'のWikipedia本文を取得できません。'
+        );
+      }
+
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(
+        data.parse.text['*'],
+        'text/html'
+      );
+
+      const table = doc.getElementById(group.tableId);
+
+      if (!table || table.tagName !== 'TABLE') {
+        throw new Error(
+          group.name + 'のテーブルID「' +
+          group.tableId + '」が見つかりません。'
+        );
+      }
+
+      return table;
+    }
+
+    // ========================================
+    // 生年月日列から年齢を取得
+    // ========================================
+
+    function extractMembersFromTable(table, groupName) {
+      const result = new Map();
+
+      const rows = Array.from(table.querySelectorAll('tr'));
+
+      if (rows.length === 0) {
+        throw new Error(
+          groupName + 'のテーブルに行がありません。'
+        );
+      }
+
+      // 見出し行から名前列・生年月日列を特定
+      let nameIndex = -1;
+      let birthdayIndex = -1;
+
+      for (const row of rows) {
+        const cells = Array.from(
+          row.querySelectorAll('th, td')
+        );
+
+        const headers = cells.map(cell =>
+          cell.textContent.replace(/\s+/g, '').trim()
+        );
+
+        const foundBirthday = headers.findIndex(text =>
+          text.includes('生年月日')
+        );
+
+        const foundName = headers.findIndex(text =>
+          text === '名前' || text === '氏名' ||
+          text === 'メンバー名'
+        );
+
+        if (foundBirthday !== -1) {
+          birthdayIndex = foundBirthday;
+
+          if (foundName !== -1) {
+            nameIndex = foundName;
+          }
+
+          break;
+        }
+      }
+
+      if (birthdayIndex === -1 || nameIndex === -1) {
+        throw new Error(
+          groupName +
+          'のテーブルで名前列または生年月日列を特定できません。'
+        );
+      }
+
+      for (const row of rows) {
+        const cells = Array.from(
+          row.querySelectorAll('th, td')
+        );
+
+        if (
+          cells.length <= nameIndex ||
+          cells.length <= birthdayIndex
+        ) {
+          continue;
+        }
+
+        const nameCell = cells[nameIndex];
+        const birthdayCell = cells[birthdayIndex];
+
+        // 見出し行は除外
+        if (
+          nameCell.tagName === 'TH' ||
+          birthdayCell.tagName === 'TH'
+        ) {
+          continue;
+        }
+
+        const name = normalizeName(nameCell.textContent);
+        const birthdayText = birthdayCell.textContent
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        if (!name || !birthdayText) {
+          continue;
+        }
+
+        // 「（22歳）」「(22歳)」などを抽出
+        const match = birthdayText.match(
+          /[（(]\s*(\d+)\s*歳\s*[）)]/
+        );
+
+        if (!match) {
+          continue;
+        }
+
+        const age = Number(match[1]);
+
+        if (!Number.isFinite(age)) {
+          continue;
+        }
+
+        result.set(name, {
+          name,
+          age,
+          group: groupName,
+          eligible: age <= MAX_AGE
+        });
+      }
+
+      return result;
+    }
+
+    // ========================================
+    // 3グループの年齢情報を読み込む
+    // ========================================
+
+    async function loadEligibleMembers() {
+      eligibleMembers.clear();
+
+      const errors = [];
+
+      for (const group of WIKIPEDIA_GROUPS) {
+        setMessage(
+          'Wikipediaを取得しています...\n' +
+          group.name
+        );
+
+        try {
+          const table = await fetchWikipediaTable(group);
+
+          const members = extractMembersFromTable(
+            table,
+            group.name
+          );
+
+          if (members.size === 0) {
+            throw new Error(
+              '年齢を取得できるメンバーがいません。'
+            );
+          }
+
+          for (const [name, member] of members) {
+            // 同名があった場合は対象メンバーとして登録
+            eligibleMembers.set(name, member);
+          }
+
+          console.log(
+            group.name + '：年齢取得件数',
+            members.size
+          );
+        } catch (error) {
+          console.error(
+            group.name + 'の取得エラー:',
+            error
+          );
+
+          errors.push(
+            group.name + ': ' + error.message
+          );
+        }
+      }
+
+      // 3グループのいずれかが取得できなければ
+      // 不完全な名簿で誤判定しないよう停止
+      if (errors.length > 0) {
+        throw new Error(
+          'Wikipediaの年齢情報を完全に取得できませんでした。\n' +
+          errors.join('\n')
+        );
+      }
+
+      const eligibleCount = Array.from(
+        eligibleMembers.values()
+      ).filter(member => member.eligible).length;
+
+      console.log(
+        '年齢取得人数:',
+        eligibleMembers.size,
+        '22歳以下:',
+        eligibleCount
+      );
+    }
+
+    // ========================================
+    // Newtagの対象判定
+    // ========================================
+
+    function isExcludedNewtag(value) {
+      const newtag = String(value ?? '').trim();
+
+      return (
+        newtag === '' ||
+        newtag.includes('その他') ||
+        newtag.includes('エラー')
+      );
+    }
+
+    function findEligibleMember(newtag) {
+      const normalizedTag = normalizeName(newtag);
+
+      if (!normalizedTag) {
+        return null;
+      }
+
+      // Newtagに含まれるメンバー名を検索
+      // 年齢が22歳以下のメンバーのみ返す
+      for (const [name, member] of eligibleMembers) {
+        if (
+          member.eligible &&
+          normalizedTag.includes(name)
+        ) {
+          return member;
+        }
+      }
+
+      return null;
+    }
+
+    // ========================================
+    // CSVから画像を抽出
+    // ========================================
+
+    function extractImagesFromCSV(csvText) {
+      const rows = parseCSV(
+        csvText.replace(/^\uFEFF/, '')
+      );
+
+      if (rows.length < 2) {
+        throw new Error('CSVにデータ行がありません。');
+      }
+
+      const headers = rows[0].map(value =>
+        value.trim().toLowerCase()
+      );
+
+      const srcIndex = headers.indexOf('src');
+      const newtagIndex = headers.indexOf('newtag');
+
+      if (srcIndex === -1 || newtagIndex === -1) {
+        throw new Error(
+          'src列またはNewtag列が見つかりません。'
+        );
+      }
+
+      const result = [];
+      const seen = new Set();
+
+      for (const row of rows.slice(1)) {
+        const src = String(row[srcIndex] ?? '').trim();
+        const newtag = String(
+          row[newtagIndex] ?? ''
+        ).trim();
+
+        if (!src || isExcludedNewtag(newtag)) {
+          continue;
+        }
+
+        // Newtagのメンバー名がWikipediaで22歳以下か確認
+        const member = findEligibleMember(newtag);
+
+        if (!member) {
+          continue;
+        }
+
+        // HTTP / HTTPSのみ
+        try {
+          const url = new URL(src);
+
+          if (
+            url.protocol !== 'http:' &&
+            url.protocol !== 'https:'
+          ) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+
+        if (seen.has(src)) {
+          continue;
+        }
+
+        seen.add(src);
+
+        result.push({
+          src,
+          newtag,
+          memberName: member.name,
+          age: member.age,
+          group: member.group
+        });
+      }
+
+      return result;
+    }
+
+    // ========================================
+    // ランダムシャッフル
+    // ========================================
+
+    function shuffle(array) {
+      const result = array.slice();
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(
+          Math.random() * (i + 1)
+        );
+
+        [result[i], result[j]] = [
+          result[j],
+          result[i]
+        ];
+      }
+
+      return result;
+    }
+
+    // ========================================
+    // 画像読み込み
+    // ========================================
+
+    function preloadImage(src) {
+      return new Promise(resolve => {
+        const image = new Image();
+
+        image.onload = () => resolve(true);
+        image.onerror = () => resolve(false);
+
+        image.src = src;
+      });
+    }
+
+    async function validateImages(list) {
+      const valid = [];
+
+      for (let i = 0; i < list.length; i++) {
+        setMessage(
+          '画像を確認しています...\n' +
+          (i + 1) + ' / ' + list.length
+        );
+
+        const item = list[i];
+        const loaded = await preloadImage(item.src);
+
+        if (loaded) {
+          valid.push(item);
+        } else {
+          failedImages.add(item.src);
+        }
+      }
+
+      return valid;
+    }
+
+    // ========================================
+    // データ取得
+    // ========================================
+
+    async function loadData() {
+      setButtonsEnabled(false);
+      imageElement.hidden = true;
+
+      try {
+        // 最初にWikipediaの年齢情報を取得
+        await loadEligibleMembers();
+
+        setMessage('スプレッドシートを読み込んでいます...');
+
+        const response = await fetch(DATA_URL, {
+          method: 'GET',
+          cache: 'no-store'
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            'CSV取得失敗: HTTP ' + response.status
+          );
+        }
+
+        const csvText = await response.text();
+
+        if (
+          /^\s*<!DOCTYPE html/i.test(csvText) ||
+          /^\s*<html/i.test(csvText)
+        ) {
+          throw new Error(
+            'CSVではなくHTMLが返されました。\n' +
+            '公開CSVのURLを確認してください。'
+          );
+        }
+
+        const candidates = extractImagesFromCSV(csvText);
+
+        console.log(
+          '年齢条件を通過した画像:',
+          candidates.length
+        );
+
+        if (candidates.length === 0) {
+          throw new Error(
+            '22歳以下のメンバーに該当する画像がありません。\n' +
+            'Newtagにメンバー名が含まれているか確認してください。'
+          );
+        }
+
+        images = await validateImages(candidates);
+
+        if (images.length === 0) {
+          throw new Error(
+            '表示可能な画像がありません。\n' +
+            'src列のURLやアクセス制限を確認してください。'
+          );
+        }
+
+        remainingImages = shuffle(images);
+
+        showNextImage();
+
+      } catch (error) {
+        console.error('データ取得エラー:', error);
+
+        imageElement.hidden = true;
+
+        setMessage(
+          'データを取得できませんでした。\n\n' +
+          (error.message || '不明なエラーが発生しました。') +
+          '\n\nWikipediaのテーブルID、公開CSVのURL、' +
+          'ネットワーク接続を確認してください。'
+        );
+
+        setButtonsEnabled(false);
+      }
+    }
+
+    // ========================================
+    // 次の画像を表示
+    // ========================================
+
+    async function showNextImage() {
+      if (isLoadingImage) {
+        return;
+      }
+
+      isLoadingImage = true;
+      setButtonsEnabled(false);
+
+      try {
+        while (remainingImages.length > 0) {
+          const item = remainingImages.pop();
+
+          if (failedImages.has(item.src)) {
+            continue;
+          }
+
+          const token = ++requestToken;
+
+          setMessage('画像を読み込んでいます...');
+
+          const loaded = await preloadImage(item.src);
+
+          if (token !== requestToken) {
+            return;
+          }
+
+          if (!loaded) {
+            failedImages.add(item.src);
+            continue;
+          }
+
+          currentImage = item.src;
+          currentTag = item.newtag;
+
+          imageElement.src = item.src;
+          imageElement.hidden = false;
+
+          hideMessage();
+          setButtonsEnabled(true);
+
+          console.log('表示中の画像:', {
+            src: item.src,
+            newtag: item.newtag,
+            member: item.memberName,
+            age: item.age,
+            group: item.group
+          });
+
+          return;
+        }
+
+        currentImage = null;
+        currentTag = '';
+        imageElement.hidden = true;
+
+        setMessage(
+          'すべての画像を確認しました。\n\n' +
+          '表示可能な画像：' + images.length + ' 枚'
+        );
+
+      } finally {
+        isLoadingImage = false;
+      }
+    }
+
+    // ========================================
+    // 評価ボタン
+    // ========================================
+
+    function rateImage(rating) {
+      if (!currentImage || isLoadingImage) {
+        return;
+      }
+
+      console.log('評価:', {
+        rating,
+        imageURL: currentImage,
+        newtag: currentTag
+      });
+
+      currentImage = null;
+      currentTag = '';
+
+      showNextImage();
+    }
+
+    document.getElementById('good').addEventListener(
+      'click',
+      () => rateImage('GOOD')
+    );
+
+    document.getElementById('soso').addEventListener(
+      'click',
+      () => rateImage('SOSO')
+    );
+
+    document.getElementById('bad').addEventListener(
+      'click',
+      () => rateImage('BAD')
+    );
+
+    // ========================================
+    // 起動
+    // ========================================
+
+    loadData();
+  </script>
+</body>
+</html>
