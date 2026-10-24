@@ -65,10 +65,11 @@
       transform: translate(-50%, -50%);
       width: 90%;
       text-align: center;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
       color: #aaa;
       font-size: 14px;
       line-height: 1.7;
-      overflow-wrap: anywhere;
       pointer-events: none;
     }
 
@@ -96,11 +97,11 @@
     }
 
     .rating:active {
-      filter: brightness(0.8);
+      filter: brightness(.8);
     }
 
     .rating:disabled {
-      opacity: 0.5;
+      opacity: .5;
       cursor: wait;
     }
 
@@ -147,33 +148,32 @@
     'use strict';
 
     // ========================================
-    // 設定
+    // スプレッドシート設定
     // ========================================
 
     const SPREADSHEET_URL =
       'https://docs.google.com/spreadsheets/d/e/' +
       '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-';
 
+    // 「取得結果」シートのgidを指定
     const SHEET_GID = '1405762441';
+
+    // シート名
+    const SHEET_NAME = '取得結果';
 
     const DATA_URL =
       SPREADSHEET_URL +
       '/gviz/tq?tqx=out:json&gid=' + SHEET_GID;
 
     // ========================================
-    // 要素
+    // 要素・状態
     // ========================================
 
     const photo = document.getElementById('photo');
     const message = document.getElementById('message');
-
     const buttons = [
       ...document.querySelectorAll('.rating')
     ];
-
-    // ========================================
-    // 状態
-    // ========================================
 
     let candidates = [];
     let remaining = [];
@@ -212,12 +212,11 @@
     function showMessage(text) {
       photo.hidden = true;
       photo.removeAttribute('src');
-
       message.textContent = text;
     }
 
     // ========================================
-    // スプレッドシート読み込み
+    // データ取得
     // ========================================
 
     async function loadData() {
@@ -236,14 +235,13 @@
 
         const text = await response.text();
 
-        // Google Visualization APIの応答を解析
         const match = text.match(
           /google\.visualization\.Query\.setResponse\(([\s\S]*?)\);?\s*$/
         );
 
         if (!match) {
           throw new Error(
-            'スプレッドシートの応答を解析できません'
+            'シートのデータを解析できません'
           );
         }
 
@@ -251,14 +249,14 @@
 
         if (result.status !== 'ok') {
           throw new Error(
-            'スプレッドシートの取得に失敗しました'
+            'シートの取得に失敗しました'
           );
         }
 
         const table = result.table;
         const columns = table.cols;
 
-        // 必要な列はsrcとNewtagのみ
+        // 取得結果シートの列
         const srcIndex = getColumnIndex(
           columns,
           'src'
@@ -271,18 +269,16 @@
 
         if (srcIndex < 0 || newtagIndex < 0) {
           throw new Error(
-            'src列またはNewtag列が見つかりません'
+            '取得結果シートにsrc列またはNewtag列がありません'
           );
         }
 
         // ========================================
-        // 対象データ抽出
+        // 抽出条件
         //
-        // 1. srcが空欄ではない
-        // 2. Newtagが空欄
-        // 3. Newtagが「その他」「エラー」ではない
-        //
-        // tags列は参照しない
+        // srcが空欄ではない
+        // Newtagが空欄
+        // tags列は使用しない
         // ========================================
 
         candidates = table.rows
@@ -293,7 +289,6 @@
               src: normalize(
                 cellValue(cells[srcIndex])
               ),
-
               newtag: normalize(
                 cellValue(cells[newtagIndex])
               )
@@ -308,34 +303,29 @@
               return false;
             }
 
-            if (
-              item.newtag === 'その他' ||
-              item.newtag === 'エラー'
-            ) {
-              return false;
-            }
-
             return true;
           });
 
         if (candidates.length === 0) {
           showMessage(
-            '条件に合う画像がありません'
+            '取得結果シートに条件に合う画像がありません'
           );
           return;
         }
 
-        // 初回のランダム表示
         remaining = [...candidates];
 
         showNextImage();
 
       } catch (error) {
-        console.error(error);
+        console.error(
+          SHEET_NAME + 'シートの読み込みエラー:',
+          error
+        );
 
         showMessage(
           'データを取得できませんでした。\n' +
-          'スプレッドシートの公開設定や列名を確認してください。'
+          '「取得結果」シートの公開設定、gid、列名を確認してください。'
         );
       }
     }
@@ -345,7 +335,6 @@
     // ========================================
 
     function pickRandom() {
-      // 全候補を表示したら再び一巡する
       if (remaining.length === 0) {
         remaining = [...candidates];
       }
@@ -358,7 +347,7 @@
     }
 
     // ========================================
-    // 次の画像を表示
+    // 次の画像
     // ========================================
 
     function showNextImage() {
@@ -372,7 +361,6 @@
       setButtonsDisabled(true);
 
       message.textContent = '画像を読み込み中...';
-
       photo.hidden = true;
 
       photo.onload = () => {
@@ -385,25 +373,21 @@
 
       photo.onerror = () => {
         console.error(
-          '画像の読み込みに失敗しました:',
+          '画像の読み込みに失敗:',
           currentItem.src
         );
 
-        // 読み込めない画像を飛ばす
-        if (remaining.length === 0) {
-          remaining = [...candidates];
-        }
-
-        // 失敗した画像を今回の巡回から除外
+        // 失敗した画像を今回の候補から除外
         remaining = remaining.filter(
           item => item.src !== currentItem.src
         );
 
-        if (remaining.length === 0) {
-          showMessage(
-            '表示できる画像がありません'
-          );
+        candidates = candidates.filter(
+          item => item.src !== currentItem.src
+        );
 
+        if (candidates.length === 0) {
+          showMessage('表示できる画像がありません');
           loadingNext = false;
           setButtonsDisabled(true);
           return;
@@ -417,7 +401,7 @@
     }
 
     // ========================================
-    // 評価ボタン
+    // GOOD / SOSO / BAD
     // ========================================
 
     buttons.forEach(button => {
@@ -428,7 +412,7 @@
 
         const rating = button.dataset.rating;
 
-        // 現在は評価を保存せず、次の画像へ進む
+        // 評価の保存は行わず、次の画像へ進む
         console.log(
           '評価:',
           rating,
