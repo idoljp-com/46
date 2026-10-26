@@ -37,7 +37,7 @@
     /* 10列で左上から詰めて配置 */
     #image-grid {
       display: grid;
-      grid-template-columns: repeat(10, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       align-content: start;
       justify-content: start;
       align-items: start;
@@ -45,6 +45,13 @@
       width: 100%;
       margin: 0;
       padding: 0;
+    }
+    
+    /* PC版：4列 */
+    @media (min-width: 768px) {
+      #image-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
     }
 
     .image-item {
