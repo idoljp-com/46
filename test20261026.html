@@ -1,0 +1,392 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>画像評価</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      overflow: auto;
+    }
+
+    #app {
+      width: 100%;
+      min-height: 100vh;
+      min-height: 100dvh;
+      background: #000;
+    }
+
+    /* 10列で左上から詰めて配置 */
+    #image-grid {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      align-content: start;
+      justify-content: start;
+      align-items: start;
+      gap: 0;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    .image-item {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+      border: 0;
+    }
+
+    .image-item img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center;
+    }
+
+    #message {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      color: #aaa;
+      text-align: center;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+      line-height: 1.8;
+    }
+
+    #message[hidden],
+    #image-grid[hidden] {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <div id="message">データを読み込んでいます...</div>
+    <div id="image-grid" hidden></div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ========================================
+    // スプレッドシート設定
+    // ========================================
+
+    const DATA_URL =
+      'https://docs.google.com/spreadsheets/d/e/' +
+      '2PACX-1vRjdk7wHXk81Qv5pBr25he2BfHnMi649uNpmPveZrtydzYMam2eUfOd7It1dtt0ficMuVQj7wZxO58-' +
+      '/pub?gid=1405762441&single=true&output=csv';
+
+    // 最大表示枚数
+    const MAX_IMAGES = 100;
+
+    // ========================================
+    // DOM
+    // ========================================
+
+    const imageGrid = document.getElementById('image-grid');
+    const messageElement = document.getElementById('message');
+
+    function setMessage(text) {
+      messageElement.textContent = text;
+      messageElement.hidden = false;
+      imageGrid.hidden = true;
+    }
+
+    // ========================================
+    // CSV解析
+    // ========================================
+
+    function parseCSV(text) {
+      const rows = [];
+      let row = [];
+      let value = '';
+      let quoted = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+
+        if (char === '"') {
+          if (quoted && text[i + 1] === '"') {
+            value += '"';
+            i++;
+          } else {
+            quoted = !quoted;
+          }
+        } else if (char === ',' && !quoted) {
+          row.push(value);
+          value = '';
+        } else if (
+          (char === '\n' || char === '\r') &&
+          !quoted
+        ) {
+          if (char === '\r' && text[i + 1] === '\n') {
+            i++;
+          }
+
+          row.push(value);
+
+          if (row.some(cell => cell.trim() !== '')) {
+            rows.push(row);
+          }
+
+          row = [];
+          value = '';
+        } else {
+          value += char;
+        }
+      }
+
+      if (value !== '' || row.length > 0) {
+        row.push(value);
+
+        if (row.some(cell => cell.trim() !== '')) {
+          rows.push(row);
+        }
+      }
+
+      return rows;
+    }
+
+    // ========================================
+    // Newtagの除外条件
+    // 空欄・その他・エラーを除外
+    // ========================================
+
+    function isExcludedNewtag(value) {
+      const newtag = String(value ?? '').trim();
+
+      return (
+        newtag === '' ||
+        newtag.includes('その他') ||
+        newtag.includes('エラー')
+      );
+    }
+
+    // ========================================
+    // CSVから画像URLを抽出
+    // ========================================
+
+    function extractImagesFromCSV(csvText) {
+      const rows = parseCSV(csvText.replace(/^\uFEFF/, ''));
+
+      if (rows.length < 2) {
+        throw new Error('CSVにデータ行がありません。');
+      }
+
+      const headers = rows[0].map(value =>
+        value.trim().toLowerCase()
+      );
+
+      const srcIndex = headers.indexOf('src');
+      const newtagIndex = headers.indexOf('newtag');
+
+      if (srcIndex === -1 || newtagIndex === -1) {
+        throw new Error(
+          'src列またはNewtag列が見つかりません。'
+        );
+      }
+
+      const result = [];
+
+      for (const row of rows.slice(1)) {
+        const src = String(row[srcIndex] ?? '').trim();
+        const newtag = String(row[newtagIndex] ?? '').trim();
+
+        if (!src || isExcludedNewtag(newtag)) {
+          continue;
+        }
+
+        try {
+          const url = new URL(src);
+
+          if (
+            url.protocol !== 'http:' &&
+            url.protocol !== 'https:'
+          ) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+
+        result.push(src);
+      }
+
+      // URLの重複を除去
+      return [...new Set(result)];
+    }
+
+    // ========================================
+    // ランダムシャッフル
+    // ========================================
+
+    function shuffle(array) {
+      const result = array.slice();
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+
+        [result[i], result[j]] = [
+          result[j],
+          result[i]
+        ];
+      }
+
+      return result;
+    }
+
+    // ========================================
+    // 画像読み込み確認
+    // ========================================
+
+    function preloadImage(src) {
+      return new Promise(resolve => {
+        const img = new Image();
+
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = src;
+      });
+    }
+
+    // ========================================
+    // 最大100枚を読み込み・表示
+    // ========================================
+
+    async function loadData() {
+      setMessage('データを読み込んでいます...');
+
+      try {
+        const response = await fetch(DATA_URL, {
+          method: 'GET',
+          cache: 'no-store'
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            'CSV取得失敗: HTTP ' + response.status
+          );
+        }
+
+        const csvText = await response.text();
+
+        if (
+          csvText.trimStart().startsWith('<!DOCTYPE html') ||
+          csvText.trimStart().startsWith('<html')
+        ) {
+          throw new Error(
+            'CSVではなくHTMLが返されました。公開URLを確認してください。'
+          );
+        }
+
+        const candidates = shuffle(
+          extractImagesFromCSV(csvText)
+        );
+
+        if (candidates.length === 0) {
+          throw new Error('表示対象の画像がありません。');
+        }
+
+        setMessage(
+          '画像を読み込んでいます...\n0 / ' + MAX_IMAGES
+        );
+
+        const validImages = [];
+        const limit = Math.min(
+          candidates.length,
+          MAX_IMAGES
+        );
+
+        // ランダム順で確認し、表示可能な画像を最大100枚取得
+        for (const src of candidates) {
+          if (validImages.length >= MAX_IMAGES) {
+            break;
+          }
+
+          const loaded = await preloadImage(src);
+
+          if (loaded) {
+            validImages.push(src);
+          }
+
+          messageElement.textContent =
+            '画像を確認しています...\n' +
+            validImages.length + ' / ' + limit;
+        }
+
+        if (validImages.length === 0) {
+          throw new Error('表示可能な画像がありません。');
+        }
+
+        // 左上から順に配置
+        const fragment = document.createDocumentFragment();
+
+        validImages.forEach((src, index) => {
+          const item = document.createElement('div');
+          item.className = 'image-item';
+
+          const img = document.createElement('img');
+          img.src = src;
+          img.alt = '画像 ' + (index + 1);
+          img.loading = 'eager';
+          img.decoding = 'async';
+
+          item.appendChild(img);
+          fragment.appendChild(item);
+        });
+
+        imageGrid.replaceChildren(fragment);
+
+        messageElement.textContent =
+          validImages.length + '枚の画像を表示しています。';
+        messageElement.hidden = true;
+        imageGrid.hidden = false;
+
+      } catch (error) {
+        console.error('データ取得エラー:', error);
+
+        setMessage(
+          'データを取得できませんでした。\n\n' +
+          (error.message || '不明なエラーが発生しました。') +
+          '\n\n公開CSVのURLやアクセス制限を確認してください。'
+        );
+      }
+    }
+
+    // ========================================
+    // 起動
+    // ========================================
+
+    loadData();
+  </script>
+</body>
+</html>
